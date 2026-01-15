@@ -1,3 +1,11 @@
+/* DigitScanner.cpp
+ * 
+ * Author           : Michael Kleber
+ * Date Created     : 01/15/2026
+ * Last Modified    : 01/15/2026
+ * 
+ */
+
 #include <algorithm>
 #include <chrono>
 #include <atomic>
