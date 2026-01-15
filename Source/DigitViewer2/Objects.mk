@@ -23,9 +23,12 @@ CURRENT += DigitWriters/BasicTextWriter.cpp
 CURRENT += DigitWriters/BasicYcdFileWriter.cpp
 CURRENT += DigitWriters/BasicYcdSetWriter.cpp
 
+CURRENT += DigitScanner/DigitScanner.cpp
+
 CURRENT += DigitViewer/DigitViewerTasks.cpp
 CURRENT += DigitViewer/DigitViewerUI2.cpp
 
 
 SOURCES := $(SOURCES) $(addprefix $(CURRENT_DIR)/, $(CURRENT))
 endif
+
