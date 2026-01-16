@@ -485,7 +485,7 @@ void find_last_d_string(BasicDigitReader& reader){
     Console::println();
 
     //  Get d from the user.
-    upL_t d = Console::scan_label_upL_range("Enter d (1-10): ", 1, 10);
+    upL_t d = Console::scan_label_upL_range("Enter d (1-13): ", 1, 13);
     Console::println();
 
     DigitScanner scanner(reader, d);
@@ -496,4 +496,5 @@ void find_last_d_string(BasicDigitReader& reader){
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 }
+
 
