@@ -374,7 +374,6 @@ void DigitScanner::search() {
 
         uiL_t chunk_to_process = std::min((uiL_t)MAX_PARALLEL_CHUNK_SIZE, limit - current_offset);
 
-        BasicParallelizer& parallelizer = get_parallelizer();
         DigitBitvectorScanAction action(
             m_reader,
             seen_strings_atomic,
@@ -388,7 +387,7 @@ void DigitScanner::search() {
             chunk_to_process,
             effective_threads
         );
-        parallelizer.run_in_parallel(action, 0, effective_threads);
+        parallelizer_default.run_in_parallel(action, 0, effective_threads);
         current_offset += chunk_to_process;
         digits_since_last_report += chunk_to_process;
 
@@ -456,7 +455,6 @@ void DigitScanner::search() {
         while (map_unfound_count.load(std::memory_order_relaxed) > 0 && current_offset < limit) {
              uiL_t chunk_to_process = std::min((uiL_t)MAX_PARALLEL_CHUNK_SIZE, limit - current_offset); 
              
-             BasicParallelizer& parallelizer = get_parallelizer();
              DigitMapScanAction action(
                 m_reader,
                 missing_strings_map,
@@ -471,7 +469,7 @@ void DigitScanner::search() {
                 chunk_to_process,
                 effective_threads
              );
-             parallelizer.run_in_parallel(action, 0, effective_threads);
+             parallelizer_default.run_in_parallel(action, 0, effective_threads);
              current_offset += chunk_to_process;
              digits_since_last_report += chunk_to_process;
 
