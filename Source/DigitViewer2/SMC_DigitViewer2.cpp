@@ -26,3 +26,5 @@
 
 #include "DigitViewer/DigitViewerTasks.cpp"
 #include "DigitViewer/DigitViewerUI2.cpp"
+
+#include "DigitScanner/DigitScanner.cpp"

@@ -52,9 +52,11 @@ void Menu_TextFile(BasicTextReader& reader){
     Console::println("Compress digits 1 - N into one or more .ycd files.", 'G');
     Console::print("  4     ", 'w');
     Console::println("Compress a subset of digits into .ycd files.", 'G');
+    Console::print("  5     ", 'w');
+    Console::println("Search for all d-digit strings.", 'G');
 
     Console::println("\nEnter your choice:", 'w');
-    upL_t c = Console::scan_label_upL_range("option: ", 0, 4);
+    upL_t c = Console::scan_label_upL_range("option: ", 0, 5);
     Console::println();
 
     switch (c){
@@ -72,6 +74,9 @@ void Menu_TextFile(BasicTextReader& reader){
             return;
         case 4:
             to_ycd_file_partial(reader);
+            return;
+        case 5:
+            find_last_d_string(reader);
             return;
         default:;
     }
@@ -115,14 +120,16 @@ void Menu_YcdFile(BasicYcdSetReader& reader){
         Console::println("Compress digits 1 - N into one or more .ycd files.", 'G');
         Console::print("  4     ", 'w');
         Console::println("Compress a subset of digits into .ycd files.", 'G');
+        Console::print("  5     ", 'w');
+        Console::println("Search for all d-digit strings.", 'G');
         Console::println();
 
-        Console::print("  5     ", 'w');
+        Console::print("  6     ", 'w');
         Console::print("Add search directory.", 'G');
         Console::println(" (if .ycd files are in multiple paths)", 'Y');
 
         Console::println("\nEnter your choice:", 'w');
-        upL_t c = Console::scan_label_upL_range("option: ", 0, 5);
+        upL_t c = Console::scan_label_upL_range("option: ", 0, 6);
         Console::println();
 
         switch (c){
@@ -142,6 +149,10 @@ void Menu_YcdFile(BasicYcdSetReader& reader){
                 to_ycd_file_partial(reader);
                 return;
             case 5:
+                find_last_d_string(reader);
+                return;
+
+            case 6:
                 Console::println("\nEnter directory:");
                 reader.add_search_path(Console::scan_utf8());
                 break;
@@ -200,3 +211,5 @@ void Menu_Main(){
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 }
+
+

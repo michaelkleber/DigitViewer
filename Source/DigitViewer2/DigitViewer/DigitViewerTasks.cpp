@@ -30,6 +30,7 @@
 #include "DigitViewer2/DigitWriters/BasicDigitWriter.h"
 #include "DigitViewer2/DigitWriters/BasicTextWriter.h"
 #include "DigitViewer2/DigitWriters/BasicYcdSetWriter.h"
+#include "DigitViewer2/DigitScanner/DigitScanner.h"
 #include "DigitViewerTasks.h"
 namespace DigitViewer2{
 ////////////////////////////////////////////////////////////////////////////////
@@ -479,8 +480,20 @@ void to_ycd_file_partial(BasicDigitReader& reader){
     );
     process_write(reader, start_pos, end_pos - start_pos, writer, start_pos);
 }
+void find_last_d_string(BasicDigitReader& reader){
+    Console::println("\n\nFind Last d-Digit String");
+    Console::println();
+
+    //  Get d from the user.
+    upL_t d = Console::scan_label_upL_range("Enter d (1-10): ", 1, 10);
+    Console::println();
+
+    DigitScanner scanner(reader, d);
+    scanner.search();
+}
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 }
+
