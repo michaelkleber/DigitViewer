@@ -15,6 +15,22 @@
 #include <mutex>
 #include <time.h>
 #include <cstdio>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+// MSVC: Map to the T0 hint (fetch to all cache levels)
+// Consider using _m_prefetchw((const void*)(addr)) instead, to prefetch for write,
+// but would need A/B performance testing to know whether that's a good idea,
+// because in practice almost all prefetches do not actually modify the bit.
+#define PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC/Clang: Map to the builtin with read/write and high locality
+#define PREFETCH(addr) __builtin_prefetch((addr), 1, 3)
+#else
+// Do nothing on other compilers
+#define PREFETCH(addr) ((void)0)
+#endif
+
 #include "PublicLibs/ConsoleIO/BasicIO.h"
 #include "PublicLibs/BasicLibs/StringTools/ToString.h"
 #include "PublicLibs/BasicLibs/Memory/SmartBuffer.h"
@@ -28,15 +44,19 @@
 #include "DigitViewer2/DigitReaders/BasicDigitReader.h"
 #include "DigitScanner.h"
 
+
+
 namespace DigitViewer2 {
 
 using namespace ymp;
 
 static double get_cpu_time(){
-    struct timespec ts;
+#if defined(__GNUC__) || defined(__clang__)
+struct timespec ts;
     if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) == 0){
         return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
     }
+#endif
     return 0;
 }
 
@@ -119,9 +139,6 @@ public:
             char digit = dec_digits[i];
             current_lookahead_hash = (current_lookahead_hash % m_radix_to_d_minus_1) * m_radix + (digit - '0');
             lookahead_values[i] = current_lookahead_hash;
-            
-            uiL_t p_idx = current_lookahead_hash / 64;
-            __builtin_prefetch(&m_seen_strings_atomic[p_idx], 1, 3);
         }
 
         // Phase 2: Main processing loop
@@ -155,7 +172,7 @@ public:
                 lookahead_values[i % PREFETCH_DIST] = current_lookahead_hash;
                 
                 uiL_t p_idx = current_lookahead_hash / 64;
-                __builtin_prefetch(&m_seen_strings_atomic[p_idx], 1, 3);
+                PREFETCH(&m_seen_strings_atomic[p_idx]);
             }
         }
     }
