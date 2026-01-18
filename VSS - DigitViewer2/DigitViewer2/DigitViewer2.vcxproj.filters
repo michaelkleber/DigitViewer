@@ -401,6 +401,9 @@
     <ClCompile Include="..\..\Source\PublicLibs\SystemLibs\FileIO\BufferredStreamFile.cpp">
       <Filter>Source Files\PublicLibs\SystemLibs\FileIO</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Source\DigitViewer2\DigitScanner\DigitScanner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\Source\DigitViewer2\DigitCount\DigitCount.h">
@@ -768,6 +771,9 @@
     </ClInclude>
     <ClInclude Include="..\..\Source\PublicLibs\SystemLibs\FileIO\BaseFile\BaseFile_Default.h">
       <Filter>Source Files\PublicLibs\SystemLibs\FileIO\BaseFile</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Source\DigitViewer2\DigitScanner\DigitScanner.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
