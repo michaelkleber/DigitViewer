@@ -18,14 +18,11 @@
 
 #if defined(_MSC_VER)
 #include <intrin.h>
-// MSVC: Map to the T0 hint (fetch to all cache levels)
-// Consider using _m_prefetchw((const void*)(addr)) instead, to prefetch for write,
-// but would need A/B performance testing to know whether that's a good idea,
-// because in practice almost all prefetches do not actually modify the bit.
+// MSVC: Map to the T0 hint (fetch to all cache levels), read-only.
 #define PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
 #elif defined(__GNUC__) || defined(__clang__)
-// GCC/Clang: Map to the builtin with read/write and high locality
-#define PREFETCH(addr) __builtin_prefetch((addr), 1, 3)
+// GCC/Clang: Map to the builtin with read-only and high locality
+#define PREFETCH(addr) __builtin_prefetch((addr), 0, 3)
 #else
 // Do nothing on other compilers
 #define PREFETCH(addr) ((void)0)
@@ -146,25 +143,28 @@ public:
             // Retrieve pre-calculated value
             uiL_t val = lookahead_values[i % PREFETCH_DIST];
 
-            // Process current value, flipping the corresponding bit in the (shared) bitvector to 1 (atomically)
+            // Process current value, checking whether the corresponding bit in the (shared) bitvector
+            // is already 1, and if not, trying to flip it to 1 atomically.  Check first because most of
+            // the time the bit is already 1 and the write is a no-op with nonzero cost.
             uiL_t idx = val / 64;
             uint64_t mask = 1ULL << (val % 64);
-            uint64_t old_val = m_seen_strings_atomic[idx].fetch_or(mask, std::memory_order_relaxed);
-            
-            if ((old_val & mask) == 0) {
-                m_found_strings_count.fetch_add(1, std::memory_order_relaxed);
+			if (!(m_seen_strings_atomic[idx].load(std::memory_order_relaxed) & mask)) {
+                uint64_t old_val = m_seen_strings_atomic[idx].fetch_or(mask, std::memory_order_relaxed);
+                if ((old_val & mask) == 0) {
+                    m_found_strings_count.fetch_add(1, std::memory_order_relaxed);
                 
-                // Only track the "last found" string if we are running single-threaded.
-                // In parallel mode, the answer is determined in the subsequent map phase.
-                if (m_num_threads == 1) {
-                    uiL_t my_pos = start_offset + i + 1;
-                    m_last_found_digit_pos.store(my_pos, std::memory_order_relaxed);
-                    m_last_found_d_string.store(val, std::memory_order_relaxed);
+                    // Only track the "last found" string if we are running single-threaded.
+                    // In parallel mode, the answer is determined in the subsequent map phase.
+                    if (m_num_threads == 1) {
+                        uiL_t my_pos = start_offset + i + 1;
+                        m_last_found_digit_pos.store(my_pos, std::memory_order_relaxed);
+                        m_last_found_d_string.store(val, std::memory_order_relaxed);
+                    }
                 }
             }
 
             // Calculate and prefetch future value.  This line of memory should be in L1 cache by the time the
-	    // inner loop next circles around to this location in the ring buffer.
+	        // inner loop next circles around to this location in the ring buffer.
             upL_t future_idx = i + PREFETCH_DIST;
             if (future_idx < num_digits) {
                 char next_digit = dec_digits[future_idx];
