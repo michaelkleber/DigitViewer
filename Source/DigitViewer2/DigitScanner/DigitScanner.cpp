@@ -96,6 +96,9 @@ public:
         uiL_t start_offset = m_current_stream_offset + index * block_size;
         uiL_t end_offset = std::min(start_offset + block_size, m_current_stream_offset + m_chunk_to_process);
         if (start_offset >= end_offset) return;
+        // these only matter when num_threads==1, but it's faster to just track them unconditionally
+        uiL_t thread_last_found_digit_pos = 0;
+        uiL_t thread_last_found_d_string = 0;
 
         // Each thread gets its own buffer
         upL_t bytes = m_reader.recommend_buffer_size(end_offset - start_offset);
@@ -122,10 +125,10 @@ public:
         RawToAscii::raw_to_dec(&dec_digits[0], &raw_digits[0], end_offset - start_offset);
 
         // Ring buffer for lookahead values, so that we can prefetch the right part of the bitvector.
-	// From empirical testing, PREFETCH_DIST 64 and 96 seem equally good, 32 and 128 are both worse.
-	// This is balancing the CPU inner loop speed, the memory prefetch speed, and the L1 cache size,
-	// so different prefetch distances will be optimal for different hardware.  If you're tuning for
-	// your machine, I would recommend using a PREFETCH_DIST value that makes d=9 fastest.
+	    // From empirical testing, PREFETCH_DIST 64 and 96 seem equally good, 32 and 128 are both worse.
+	    // This is balancing the CPU inner loop speed, the memory prefetch speed, and the L1 cache size,
+	    // so different prefetch distances will be optimal for different hardware.  If you're tuning for
+	    // your machine, I would recommend using a PREFETCH_DIST value that makes d=9 fastest.
         const int PREFETCH_DIST = 96;
         uiL_t lookahead_values[PREFETCH_DIST];
         uiL_t current_lookahead_hash = thread_d_string_value;
@@ -152,14 +155,9 @@ public:
                 uint64_t old_val = m_seen_strings_atomic[idx].fetch_or(mask, std::memory_order_relaxed);
                 if ((old_val & mask) == 0) {
                     m_found_strings_count.fetch_add(1, std::memory_order_relaxed);
-                
-                    // Only track the "last found" string if we are running single-threaded.
-                    // In parallel mode, the answer is determined in the subsequent map phase.
-                    if (m_num_threads == 1) {
-                        uiL_t my_pos = start_offset + i + 1;
-                        m_last_found_digit_pos.store(my_pos, std::memory_order_relaxed);
-                        m_last_found_d_string.store(val, std::memory_order_relaxed);
-                    }
+                    // these only matter when num_threads==1, but it's faster to just track them unconditionally
+                    thread_last_found_digit_pos = start_offset + i + 1;
+                    thread_last_found_d_string = val;
                 }
             }
 
@@ -174,6 +172,10 @@ public:
                 uiL_t p_idx = current_lookahead_hash / 64;
                 PREFETCH(&m_seen_strings_atomic[p_idx]);
             }
+        }
+        if (m_num_threads == 1) {
+            m_last_found_digit_pos.store(thread_last_found_digit_pos, std::memory_order_relaxed);
+            m_last_found_d_string.store(thread_last_found_d_string, std::memory_order_relaxed);
         }
     }
 
