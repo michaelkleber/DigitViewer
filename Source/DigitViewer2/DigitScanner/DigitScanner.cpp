@@ -542,13 +542,22 @@ void DigitScanner::search() {
 
     Console::println("\nSearch Complete.");
 
-    if (found_strings_count.load(std::memory_order_relaxed) == total_strings) {
+    uiL_t found = found_strings_count.load(std::memory_order_relaxed);
+    if (found == total_strings) {
         Console::println("All " + StringTools::tostr(total_strings, StringTools::COMMAS) + " d-digit strings found!");
         Console::println("The last unique d-digit string (" + StringTools::tostr(last_found_d_string.load(std::memory_order_relaxed)) + ") was found at digit position: " + StringTools::tostr(last_found_digit_pos.load(std::memory_order_relaxed), StringTools::COMMAS));
     } else {
-        Console::println("Only " + StringTools::tostr(found_strings_count.load(std::memory_order_relaxed), StringTools::COMMAS) + " out of " + StringTools::tostr(total_strings, StringTools::COMMAS) + " d-digit strings were found.");
-        Console::println("This is " + StringTools::tostr((upL_t)(found_strings_count.load(std::memory_order_relaxed) * 100 / total_strings)) + "% of all possible strings.");
+        Console::println("Only " + StringTools::tostr(found, StringTools::COMMAS) + " out of " + StringTools::tostr(total_strings, StringTools::COMMAS) + " d-digit strings were found.");
+        Console::println("This is " + StringTools::tostr((upL_t)(found * 100 / total_strings)) + "% of all possible strings.");
         Console::println("Digits processed: " + StringTools::tostr(current_offset, StringTools::COMMAS));
+        if (total_strings < found + 20) {
+            Console::println("The digit strings that haven't appeared yet are:");
+            for (const auto& pair : missing_strings_map) {
+                if (pair.second.empty()) {
+                    Console::println(StringTools::tostr_width(pair.first, m_d));
+                }
+            }
+        }
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();

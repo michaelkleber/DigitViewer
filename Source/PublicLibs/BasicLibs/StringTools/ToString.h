@@ -40,6 +40,7 @@ YM_NO_INLINE    std::string tostrln     (uiL_t x, NumberFormat format = NORMAL);
 YM_NO_INLINE    std::string tostrln     (siL_t x, NumberFormat format = NORMAL);
 static          std::string tostrln     (u32_t x, NumberFormat format = NORMAL){ return tostrln((uiL_t)x, format); }
 static          std::string tostrln     (s32_t x, NumberFormat format = NORMAL){ return tostrln((siL_t)x, format); }
+YM_NO_INLINE    std::string tostr_width (uiL_t x, int width);
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 //  Float

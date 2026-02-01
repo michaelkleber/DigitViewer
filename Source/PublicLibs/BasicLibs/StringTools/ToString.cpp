@@ -216,6 +216,13 @@ YM_NO_INLINE std::string tostrln(uiL_t x, NumberFormat format){
 YM_NO_INLINE std::string tostrln(siL_t x, NumberFormat format){
     return tostr(x, format) += "\r\n";
 }
+YM_NO_INLINE std::string tostr_width(uiL_t x, int width){
+    std::ostringstream out;
+    out << std::setfill('0');
+    out << std::setw(width);
+    out << x;
+    return out.str();
+}
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
