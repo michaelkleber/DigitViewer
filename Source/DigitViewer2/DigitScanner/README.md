@@ -46,8 +46,11 @@ If you don't have $10^d$ bits of memory, then you could scan the digits more tha
 This multi-scan idea is not implemented here.  Call a friend with more RAM.
 
 ### Parallelization and efficiency
-To run this search faster, we use many threads, and also a bitvector built on top of atomic values so that the threads
-don't corrupt one another's work or fight about which of them should increment the found-strings counter.
+To run this search faster, we use many threads.  We can't have all those threads writing to the same memory at once
+(their changes might clobber each other), so we implement a little mapreduce-like arrangement: The mappers each own a
+chunk of digits and convert them into d-digit values; the reducers each own a chunk of memory and flip bits from 0 to 1
+when the value is seen.  The shuffling between mappers and reducers is implemented by storing the values in an NxN array
+of vectors of values, where vector (i,j) holds values produced by mapper i and consumed by reducer j.
 
 We stop that approach when the bitvector is getting close to all 1's, and switch to a new phase where we track the arrival
 of the last few thousand strings in a (mutex-guarded) hash map that remembers at what position those strings finally appear.
