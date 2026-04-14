@@ -2,7 +2,7 @@
  * 
  * Author           : Michael Kleber
  * Date Created     : 01/15/2026
- * Last Modified    : 01/15/2026
+ * Last Modified    : 04/07/2026
  * Copyright 2026 Google LLC
  * 
  */
@@ -63,32 +63,30 @@ static std::string format_times(double wall_time, double cpu_time) {
     return std::string(buffer);
 }
 
-class DigitBitvectorScanAction : public ymp::BasicAction {
+class DigitsMapperAction : public ymp::BasicAction {
 public:
-    DigitBitvectorScanAction(
+    DigitsMapperAction(
         BasicDigitReader& reader,
-        std::vector<std::atomic<uint64_t>>& seen_strings_atomic,
-        std::atomic<uiL_t>& found_strings_count,
-        std::atomic<uiL_t>& last_found_digit_pos,
-        std::atomic<uiL_t>& last_found_d_string,
+        std::vector<std::vector<std::vector<uint64_t>>>& buckets,
         uiL_t radix_to_d_minus_1,
         upL_t digits,
         char radix,
         uiL_t current_stream_offset,
         uiL_t chunk_to_process,
-        upL_t num_threads
+        upL_t num_threads,
+        uiL_t partition_size_bits,
+        uiL_t recommended_bucket_capacity
     )
         : m_reader(reader)
-        , m_seen_strings_atomic(seen_strings_atomic)
-        , m_found_strings_count(found_strings_count)
-        , m_last_found_digit_pos(last_found_digit_pos)
-        , m_last_found_d_string(last_found_d_string)
+        , m_buckets(buckets)
         , m_radix_to_d_minus_1(radix_to_d_minus_1)
         , m_d(digits)
         , m_radix(radix)
         , m_current_stream_offset(current_stream_offset)
         , m_chunk_to_process(chunk_to_process)
         , m_num_threads(num_threads)
+        , m_partition_size_bits(partition_size_bits)
+        , m_recommended_bucket_capacity(recommended_bucket_capacity)
     {}
 
     virtual void run(upL_t index = 0) override {
@@ -96,17 +94,23 @@ public:
         uiL_t start_offset = m_current_stream_offset + index * block_size;
         uiL_t end_offset = std::min(start_offset + block_size, m_current_stream_offset + m_chunk_to_process);
         if (start_offset >= end_offset) return;
-        // these only matter when num_threads==1, but it's faster to just track them unconditionally
-        uiL_t thread_last_found_digit_pos = 0;
-        uiL_t thread_last_found_d_string = 0;
 
-        // Each thread gets its own buffer
+        auto& my_buckets = m_buckets[index];
+
+        // Clear my row in buckets (one bucket for each partition)
+        for (upL_t j = 0; j < m_num_threads; ++j) {
+            auto& bucket = my_buckets[j];
+            bucket.clear();
+            if (bucket.capacity() < m_recommended_bucket_capacity) {
+                bucket.reserve(m_recommended_bucket_capacity);
+            }
+        }
+
         upL_t bytes = m_reader.recommend_buffer_size(end_offset - start_offset);
         SmartBuffer<> buffer(bytes, BUFFER_ALIGNMENT);
         std::vector<char> raw_digits(end_offset - start_offset);
         AlignedBufferC<BUFFER_ALIGNMENT> frame(buffer, bytes);
         
-        // Each thread seeds its sliding window, using the d-1 digits before its range of digits begins
         uiL_t thread_d_string_value = 0;
         upL_t seed_digits = m_d - 1;
         if (start_offset > 0) {
@@ -124,72 +128,84 @@ public:
         std::vector<char> dec_digits(end_offset - start_offset);
         RawToAscii::raw_to_dec(&dec_digits[0], &raw_digits[0], end_offset - start_offset);
 
-        // Ring buffer for lookahead values, so that we can prefetch the right part of the bitvector.
-	    // From empirical testing, PREFETCH_DIST 64 and 96 seem equally good, 32 and 128 are both worse.
-	    // This is balancing the CPU inner loop speed, the memory prefetch speed, and the L1 cache size,
-	    // so different prefetch distances will be optimal for different hardware.  If you're tuning for
-	    // your machine, I would recommend using a PREFETCH_DIST value that makes d=9 fastest.
-        const int PREFETCH_DIST = 96;
-        uiL_t lookahead_values[PREFETCH_DIST];
-        uiL_t current_lookahead_hash = thread_d_string_value;
+        uiL_t string_value = thread_d_string_value;
         upL_t num_digits = end_offset - start_offset;
 
-        // Phase 1: Pre-fill the ring buffer
-        for (upL_t i = 0; i < PREFETCH_DIST && i < num_digits; ++i) {
-            char digit = dec_digits[i];
-            current_lookahead_hash = (current_lookahead_hash % m_radix_to_d_minus_1) * m_radix + (digit - '0');
-            lookahead_values[i] = current_lookahead_hash;
-        }
-
-        // Phase 2: Main processing loop
         for (upL_t i = 0; i < num_digits; ++i) {
-            // Retrieve pre-calculated value
-            uiL_t val = lookahead_values[i % PREFETCH_DIST];
+            char digit = dec_digits[i];
+            string_value = (string_value % m_radix_to_d_minus_1) * m_radix + (digit - '0');
+            
+            uiL_t val = string_value;
+            uiL_t partition_id = val / m_partition_size_bits;
+            if (partition_id >= m_num_threads) partition_id = m_num_threads - 1;
 
-            // Process current value, checking whether the corresponding bit in the (shared) bitvector
-            // is already 1, and if not, trying to flip it to 1 atomically.  Check first because most of
-            // the time the bit is already 1 and the write is a no-op with nonzero cost.
-            uiL_t idx = val / 64;
-            uint64_t mask = 1ULL << (val % 64);
-			if (!(m_seen_strings_atomic[idx].load(std::memory_order_relaxed) & mask)) {
-                uint64_t old_val = m_seen_strings_atomic[idx].fetch_or(mask, std::memory_order_relaxed);
-                if ((old_val & mask) == 0) {
-                    m_found_strings_count.fetch_add(1, std::memory_order_relaxed);
-                    // these only matter when num_threads==1, but it's faster to just track them unconditionally
-                    thread_last_found_digit_pos = start_offset + i + 1;
-                    thread_last_found_d_string = val;
-                }
-            }
-
-            // Calculate and prefetch future value.  This line of memory should be in L1 cache by the time the
-	        // inner loop next circles around to this location in the ring buffer.
-            upL_t future_idx = i + PREFETCH_DIST;
-            if (future_idx < num_digits) {
-                char next_digit = dec_digits[future_idx];
-                current_lookahead_hash = (current_lookahead_hash % m_radix_to_d_minus_1) * m_radix + (next_digit - '0');
-                lookahead_values[i % PREFETCH_DIST] = current_lookahead_hash;
-                
-                uiL_t p_idx = current_lookahead_hash / 64;
-                PREFETCH(&m_seen_strings_atomic[p_idx]);
-            }
-        }
-        if (m_num_threads == 1) {
-            m_last_found_digit_pos.store(thread_last_found_digit_pos, std::memory_order_relaxed);
-            m_last_found_d_string.store(thread_last_found_d_string, std::memory_order_relaxed);
+            my_buckets[partition_id].push_back(val);
         }
     }
 
 private:
     BasicDigitReader& m_reader;
-    std::vector<std::atomic<uint64_t>>& m_seen_strings_atomic;
-    std::atomic<uiL_t>& m_found_strings_count;
-    std::atomic<uiL_t>& m_last_found_digit_pos;
-    std::atomic<uiL_t>& m_last_found_d_string;
+    std::vector<std::vector<std::vector<uint64_t>>>& m_buckets;
     uiL_t m_radix_to_d_minus_1;
     upL_t m_d;
     char m_radix;
     uiL_t m_current_stream_offset;
     uiL_t m_chunk_to_process;
+    upL_t m_num_threads;
+    uiL_t m_partition_size_bits;
+    uiL_t m_recommended_bucket_capacity;
+};
+
+class ValuesReducerAction : public ymp::BasicAction {
+public:
+    ValuesReducerAction(
+        std::vector<uint64_t>& seen_strings,
+        const std::vector<std::vector<std::vector<uint64_t>>>& buckets,
+        std::atomic<uiL_t>& found_strings_count,
+        upL_t num_threads
+    )
+        : m_seen_strings(seen_strings)
+        , m_buckets(buckets)
+        , m_found_strings_count(found_strings_count)
+        , m_num_threads(num_threads)
+    {}
+
+    virtual void run(upL_t index = 0) override {
+        upL_t j = index;
+        if (j >= m_num_threads) return;
+
+        uiL_t local_new_bits = 0;
+        const int PREFETCH_DIST = 16;
+
+        // Directly iterate over buckets without merging or sorting
+        for (upL_t i = 0; i < m_num_threads; ++i) {
+            const auto& bucket = m_buckets[i][j];
+            
+            for (size_t k = 0; k < bucket.size(); ++k) {
+                if (k + PREFETCH_DIST < bucket.size()) {
+                    uiL_t future_val = bucket[k + PREFETCH_DIST];
+                    PREFETCH(&m_seen_strings[future_val / 64]);
+                }
+
+                uiL_t val = bucket[k];
+                uiL_t idx = val / 64;
+                uint64_t mask = 1ULL << (val % 64);
+                
+                uint64_t old_val = m_seen_strings[idx];
+                if (!(old_val & mask)) {
+                    m_seen_strings[idx] = old_val | mask;
+                    local_new_bits++;
+                }
+            }
+        }
+
+        m_found_strings_count.fetch_add(local_new_bits, std::memory_order_relaxed);
+    }
+
+private:
+    std::vector<uint64_t>& m_seen_strings;
+    const std::vector<std::vector<std::vector<uint64_t>>>& m_buckets;
+    std::atomic<uiL_t>& m_found_strings_count;
     upL_t m_num_threads;
 };
 
@@ -316,10 +332,8 @@ void DigitScanner::search() {
     }
 
     //  Use atomic vector for thread-safe bitmask operations.
-    std::vector<std::atomic<uint64_t>> seen_strings_atomic(num_atomic_words);
-    for (auto& word : seen_strings_atomic) {
-        word.store(0, std::memory_order_relaxed);
-    }
+    //  Use atomic vector for thread-safe bitmask operations.
+    std::vector<uint64_t> seen_strings(num_atomic_words, 0);
     
     //  Use atomic counters for thread-safe updates.
     std::atomic<uiL_t> found_strings_count(0);
@@ -351,63 +365,68 @@ void DigitScanner::search() {
 
     Console::println("Scanning for d-digit strings...");
 
-    // Start scanning from the first possible d-digit string.
-    // The first string ends at index d-1 (0-based).
-    // The parallel action will look back d-1 digits to seed the sliding window correctly.
     current_offset = m_d - 1;
-    
-    // We haven't processed any digits yet.
     digits_since_last_report = 0;
 
     const upL_t MAX_PARALLEL_CHUNK_SIZE = 100000000;
-    const upL_t MIN_PARALLEL_CHUNK_SIZE = 1000000;
-    const upL_t SEQUENTIAL_BLOCK_SIZE = 1000000;
-    upL_t tds = Environment::GetLogicalProcessors();
     
-    // If the total number of strings is small enough that they might all appear in a single chunk,
-    // run sequentially to ensure we correctly identify the last string.
-    // If there are enough strings that we run on multiple threads, then we will switch out of
-    // parallel execution when unfound_count < 10000, checked inside the loop below.
-    upL_t effective_threads = tds;
-    if (total_strings < MAX_PARALLEL_CHUNK_SIZE) {
-        effective_threads = 1;
-        Console::println("Total strings (" + StringTools::tostr(total_strings) + ") is small. Forcing sequential mode for correctness.");
-    } else {
-        Console::println("Using " + StringTools::tostr(effective_threads) + " threads for parallel processing.");
-    }
+    // Use floor(95% of available cores)
+    upL_t effective_threads = (Environment::GetLogicalProcessors() * 95) / 100;
+    if (effective_threads == 0) effective_threads = 1;
+    Console::println("Using " + StringTools::tostr(effective_threads) + " threads for parallel processing.");
 
-    // Scan phase 1: Use a bitvector (of atomics) to record which of the 10^d strings have been seen.
+    // Calculate partition size for partitions, aligned to 512 bits (cache line)
+    uiL_t partition_size_bits = ((total_strings / effective_threads) / 512) * 512;
+    if (partition_size_bits == 0) partition_size_bits = 512; // fallback for small total_strings
+
+    // Pre-allocate buckets and merge lists
+    std::vector<std::vector<std::vector<uint64_t>>> buckets(effective_threads, std::vector<std::vector<uint64_t>>(effective_threads));
+
+    uiL_t recommended_bucket_capacity = (MAX_PARALLEL_CHUNK_SIZE * 12) / (effective_threads * effective_threads * 10);
+    if (recommended_bucket_capacity < 1000) recommended_bucket_capacity = 1000;
+
+    // Scan phase 1: Use a bitvector to record which of the 10^d strings have been seen.
     while (found_strings_count.load(std::memory_order_acquire) < total_strings && current_offset < limit) {
         uiL_t found_count = found_strings_count.load(std::memory_order_relaxed);
         uiL_t unfound_count = total_strings - found_count;
 
-        if (effective_threads > 1 && unfound_count < 10000){
-            // With this few strings left to search for, it is faster to switch to the Map-based scan	    
+        if (unfound_count < 100000){
+            // Switch to Map-based scan
             auto current_time = std::chrono::high_resolution_clock::now();
             double current_cpu = get_cpu_time();
             std::chrono::duration<double> elapsed = current_time - start_time;
             Console::println("\n" + StringTools::tostr(unfound_count) +
-			     " strings remaining. Switching to map-based parallel mode. Time: " +
-			     format_times(elapsed.count(), current_cpu - start_cpu));
+                             " strings remaining. Switching to map-based parallel mode. Time: " +
+                             format_times(elapsed.count(), current_cpu - start_cpu));
             break;
         }
 
         uiL_t chunk_to_process = std::min((uiL_t)MAX_PARALLEL_CHUNK_SIZE, limit - current_offset);
 
-        DigitBitvectorScanAction action(
+        // Phase 1: Distribution
+        DigitsMapperAction dist_action(
             m_reader,
-            seen_strings_atomic,
-            found_strings_count,
-            last_found_digit_pos,
-            last_found_d_string,
+            buckets,
             radix_to_d_minus_1,
             m_d,
             m_reader.radix(),
             current_offset,
             chunk_to_process,
+            effective_threads,
+            partition_size_bits,
+            recommended_bucket_capacity
+        );
+        parallelizer_default.run_in_parallel(dist_action, 0, effective_threads);
+
+        // Phase 2: Application
+        ValuesReducerAction app_action(
+            seen_strings,
+            buckets,
+            found_strings_count,
             effective_threads
         );
-        parallelizer_default.run_in_parallel(action, 0, effective_threads);
+        parallelizer_default.run_in_parallel(app_action, 0, effective_threads);
+
         current_offset += chunk_to_process;
         digits_since_last_report += chunk_to_process;
 
@@ -438,7 +457,7 @@ void DigitScanner::search() {
     std::mutex map_mutex;
     
     // Bloom Filter setup
-    const uiL_t BLOOM_BITS_LOG2 = 18;
+    const uiL_t BLOOM_BITS_LOG2 = 20;
     const uiL_t BLOOM_SIZE = 1ULL << BLOOM_BITS_LOG2;
     const uiL_t BLOOM_MASK = BLOOM_SIZE - 1;
     std::vector<uint64_t> bloom_filter((BLOOM_SIZE + 63) / 64, 0);
@@ -446,8 +465,8 @@ void DigitScanner::search() {
     if (found_strings_count.load(std::memory_order_relaxed) < total_strings) {
         // Build the map of missing strings
         // This could be parallelized too, but it seems so fast that it's not worth it.
-        for (size_t i = 0; i < seen_strings_atomic.size(); ++i) {
-            uint64_t word = seen_strings_atomic[i].load(std::memory_order_relaxed);
+        for (size_t i = 0; i < seen_strings.size(); ++i) {
+            uint64_t word = seen_strings[i];
             if (word == ~0ULL) continue;
 
             for (int bit = 0; bit < 64; ++bit) {
@@ -499,8 +518,8 @@ void DigitScanner::search() {
                 double current_cpu = get_cpu_time();
                 std::chrono::duration<double> elapsed = current_time - start_time;
                 Console::println(
-		    "Progress: " + StringTools::tostr(total_strings - map_unfound_count.load(std::memory_order_relaxed), StringTools::COMMAS) +
-		    " / " + StringTools::tostr(total_strings, StringTools::COMMAS) +
+                    "Progress: " + StringTools::tostr(total_strings - map_unfound_count.load(std::memory_order_relaxed), StringTools::COMMAS) +
+                    " / " + StringTools::tostr(total_strings, StringTools::COMMAS) +
                     " strings found. Digits Scanned: " + StringTools::tostr(current_offset, StringTools::COMMAS) +
                     ". Time elapsed: " + format_times(elapsed.count(), current_cpu - start_cpu)
                 );
